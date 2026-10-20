@@ -13,18 +13,43 @@ const path = require('path');
 // PASS in .env for production Gmail or any SMTP provider.
 // ─────────────────────────────────────────────────────────
 const createMailTransporter = async () => {
+  const service = (process.env.EMAIL_SERVICE || 'gmail').toLowerCase();
+  const user = process.env.EMAIL_USER;
+  const pass = process.env.EMAIL_PASS ? process.env.EMAIL_PASS.replace(/\s+/g, '') : '';
+
+  const isPlaceholder = !user || !pass || 
+    user.includes('your_campus_notifications') || 
+    pass.includes('your_gmail_app_password') ||
+    user.includes('example.com');
+
   // Real SMTP credentials supplied in .env → use them directly
-  if (process.env.EMAIL_USER && process.env.EMAIL_PASS && process.env.EMAIL_SERVICE !== 'ethereal') {
-    return nodemailer.createTransport({
-      service: process.env.EMAIL_SERVICE || 'gmail',
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS
-      },
-      tls: {
-        rejectUnauthorized: false
-      }
-    });
+  if (!isPlaceholder && service !== 'ethereal') {
+    if (service === 'outlook' || service === 'hotmail') {
+      return nodemailer.createTransport({
+        host: 'smtp-mail.outlook.com',
+        port: 587,
+        secure: false,
+        auth: { user, pass },
+        tls: { ciphers: 'SSLv3', rejectUnauthorized: false }
+      });
+    } else if (service === 'office365') {
+      return nodemailer.createTransport({
+        host: 'smtp.office365.com',
+        port: 587,
+        secure: false,
+        auth: { user, pass },
+        tls: { rejectUnauthorized: false }
+      });
+    } else {
+      return nodemailer.createTransport({
+        host: 'smtp.gmail.com',
+        port: 587,
+        secure: false,
+        family: 4,
+        auth: { user, pass },
+        tls: { rejectUnauthorized: false }
+      });
+    }
   }
 
   // Try Ethereal (fake SMTP with preview URL) — requires internet access
@@ -1065,7 +1090,11 @@ exports.notifyOfficer = async (req, res) => {
         console.log(`📧 [SCGRS Notify] Email dispatched to ${assignedOfficer.email}`);
       }
     } catch (mailErr) {
-      console.warn('⚠️ [SCGRS Notify] SMTP delivery issue, logging fallback notification:', mailErr.message);
+      console.warn('⚠️ [SCGRS Notify] SMTP delivery issue:', mailErr.message);
+      return res.status(502).json({
+        message: 'Email sending failed: ' + mailErr.message + '. Check SMTP credentials in backend/.env',
+        error: mailErr.message
+      });
     }
 
     // Persist notification status

@@ -217,6 +217,12 @@ def classify_complaint_ml(text: str) -> dict:
             prob_dict = {classes[i]: float(probs[i]) for i in range(len(classes))}
             sorted_probs = sorted(prob_dict.items(), key=lambda x: x[1], reverse=True)
             best_cat, best_prob = sorted_probs[0]
+            second_prob = sorted_probs[1][1] if len(sorted_probs) > 1 else 0.0
+
+            # In multi-class classification (7+ categories), raw probability is diluted (prior ~0.14).
+            # We calibrate confidence based on separation margin against the 2nd runner-up:
+            margin_ratio = (best_prob - second_prob) / max(0.001, best_prob + second_prob)
+            calibrated_conf = min(0.98, max(0.45, round(0.55 + margin_ratio * 0.40, 2)))
 
             # Extract top matching n-grams
             vec = sklearn_pipeline.named_steps['tfidf']
@@ -227,7 +233,8 @@ def classify_complaint_ml(text: str) -> dict:
 
             return {
                 "predicted_category": best_cat,
-                "confidence": round(best_prob, 3),
+                "confidence": calibrated_conf,
+                "raw_probability": round(best_prob, 3),
                 "distribution": {cat: round(p, 3) for cat, p in sorted_probs[:5]},
                 "top_features": top_words,
                 "model_engine": "Scikit-Learn TF-IDF + MultinomialNB"

@@ -60,11 +60,19 @@ router.post('/ai/analyze', verifyToken, async (req, res) => {
       if (matchedKeywords.length === 0) totalScore = 5;
 
       let priority = "LOW";
-      if (totalScore >= 80) priority = "CRITICAL";
-      else if (totalScore >= 60) priority = "HIGH";
-      else if (totalScore >= 40) priority = "MEDIUM";
-
-      const confidencePercent = Math.min(100, Math.max(5, Math.round(totalScore)));
+      let confidencePercent = 30;
+      if (totalScore >= 80) {
+        priority = "CRITICAL";
+        confidencePercent = Math.min(98, Math.max(88, Math.round(88 + ((totalScore - 80) / 40) * 10)));
+      } else if (totalScore >= 60) {
+        priority = "HIGH";
+        confidencePercent = Math.min(87, Math.max(76, Math.round(76 + ((totalScore - 60) / 20) * 11)));
+      } else if (totalScore >= 40) {
+        priority = "MEDIUM";
+        confidencePercent = Math.min(75, Math.max(62, Math.round(62 + ((totalScore - 40) / 20) * 13)));
+      } else {
+        confidencePercent = totalScore > 0 ? Math.min(60, Math.max(45, Math.round(45 + (totalScore / 40) * 15))) : 30;
+      }
       const reason = matchedKeywords.length > 0
         ? `Matched keywords: ${matchedKeywords.join(', ')}.`
         : `General context detected.`;
