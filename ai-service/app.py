@@ -5,6 +5,7 @@ from priority_engine import analyze_complaint
 from question_engine import get_guided_question, detect_category_from_text
 from campus_knowledge import query_campus_ai
 from ml_classifier import classify_complaint_ml
+from semantic_similarity import match_duplicates_semantic, compute_semantic_similarity
 
 app = Flask(__name__)
 # Enable CORS for cross-origin requests
@@ -73,6 +74,23 @@ def chat():
         return jsonify(response)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route('/api/ai/semantic-similarity', methods=['POST'])
+def semantic_similarity():
+    try:
+        data = request.get_json() or {}
+        query = data.get('query', '')
+        candidates = data.get('candidates', [])
+        threshold = float(data.get('threshold', 0.50))
+
+        matches = match_duplicates_semantic(query, candidates, threshold=threshold)
+        return jsonify({
+            "hasMatches": len(matches) > 0,
+            "matches": matches
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))

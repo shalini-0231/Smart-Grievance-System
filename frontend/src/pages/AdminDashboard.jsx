@@ -47,7 +47,11 @@ const AdminDashboard = () => {
     setNotifyingId(complaintId);
     try {
       const res = await api.notifyOfficer(complaintId);
-      addToast(`📧 Email sent to ${officerEmail}!`, 'success');
+      if (res.fallback) {
+        addToast(`ℹ️ Officer notified (Simulated Delivery). Check SMTP in backend/.env for real inbox delivery.`, 'info');
+      } else {
+        addToast(`📧 Email sent to ${officerEmail}!`, 'success');
+      }
       // Update local state immediately — no need for a full reload
       setComplaints(prev =>
         prev.map(c =>

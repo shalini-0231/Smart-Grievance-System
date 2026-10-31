@@ -25,7 +25,7 @@ mongoose.connect(mongoUri)
     const officerController = require('./controllers/officerController');
     
     await authController.seedDemoUsers();
-    await complaintController.seedDemoComplaints();
+    // await complaintController.seedDemoComplaints(); // Disabled so database remains empty for manual entries
     await officerController.seedDemoOfficers();
 
     // Run initial SLA & resolution expiry check

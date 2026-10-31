@@ -296,7 +296,11 @@ const ComplaintDetails = () => {
     setError('');
     try {
       const res = await api.notifyOfficer(complaint._id);
-      addToast(`📧 Email notification sent to ${complaint.assignedOfficer?.email}!`, 'success');
+      if (res.fallback) {
+        addToast(`ℹ️ Officer notified (Simulated Test Delivery). Check SMTP credentials in backend/.env for real Gmail delivery.`, 'info');
+      } else {
+        addToast(`📧 Email notification sent to ${complaint.assignedOfficer?.email}!`, 'success');
+      }
       // Refresh complaint to reflect notified status + timestamp
       await loadComplaintDetails();
     } catch (err) {

@@ -12,7 +12,14 @@ const path = require('path');
 // out-of-the-box even in dev.  Swap EMAIL_SERVICE / USER /
 // PASS in .env for production Gmail or any SMTP provider.
 // ─────────────────────────────────────────────────────────
-const createMailTransporter = async () => {
+// ─────────────────────────────────────────────────────────
+// Resilient Email Utility — attempts configured SMTP credentials
+// first (e.g. Gmail / Outlook / Office365). If primary SMTP fails
+// (e.g. invalid app password, network restrictions, or timeout),
+// it automatically falls back to Ethereal / simulated delivery so
+// officer assignment and student updates never break or block the app.
+// ─────────────────────────────────────────────────────────
+const createPrimaryTransporter = () => {
   const service = (process.env.EMAIL_SERVICE || 'gmail').toLowerCase();
   const user = process.env.EMAIL_USER;
   const pass = process.env.EMAIL_PASS ? process.env.EMAIL_PASS.replace(/\s+/g, '') : '';
@@ -22,62 +29,97 @@ const createMailTransporter = async () => {
     pass.includes('your_gmail_app_password') ||
     user.includes('example.com');
 
-  // Real SMTP credentials supplied in .env → use them directly
-  if (!isPlaceholder && service !== 'ethereal') {
-    if (service === 'outlook' || service === 'hotmail') {
-      return nodemailer.createTransport({
-        host: 'smtp-mail.outlook.com',
-        port: 587,
-        secure: false,
-        auth: { user, pass },
-        tls: { ciphers: 'SSLv3', rejectUnauthorized: false }
-      });
-    } else if (service === 'office365') {
-      return nodemailer.createTransport({
-        host: 'smtp.office365.com',
-        port: 587,
-        secure: false,
-        auth: { user, pass },
-        tls: { rejectUnauthorized: false }
-      });
-    } else {
-      return nodemailer.createTransport({
-        host: 'smtp.gmail.com',
-        port: 587,
-        secure: false,
-        family: 4,
-        auth: { user, pass },
-        tls: { rejectUnauthorized: false }
-      });
+  if (isPlaceholder || service === 'ethereal') {
+    return null;
+  }
+
+  if (service === 'outlook' || service === 'hotmail') {
+    return nodemailer.createTransport({
+      host: 'smtp-mail.outlook.com',
+      port: 587,
+      secure: false,
+      auth: { user, pass },
+      tls: { ciphers: 'SSLv3', rejectUnauthorized: false }
+    });
+  } else if (service === 'office365') {
+    return nodemailer.createTransport({
+      host: 'smtp.office365.com',
+      port: 587,
+      secure: false,
+      auth: { user, pass },
+      tls: { rejectUnauthorized: false }
+    });
+  } else {
+    // Gmail or default SMTP
+    return nodemailer.createTransport({
+      host: 'smtp.gmail.com',
+      port: 587,
+      secure: false,
+      family: 4,
+      auth: { user, pass },
+      tls: { rejectUnauthorized: false }
+    });
+  }
+};
+
+const sendEmailWithFallback = async (mailOptions) => {
+  const primaryTransporter = createPrimaryTransporter();
+
+  // 1. Try real SMTP if configured
+  if (primaryTransporter) {
+    try {
+      const info = await primaryTransporter.sendMail(mailOptions);
+      console.log(`📧 [SCGRS Email] Successfully dispatched via primary SMTP to ${mailOptions.to}`);
+      return {
+        success: true,
+        mode: 'smtp',
+        messageId: info.messageId,
+        previewUrl: null
+      };
+    } catch (primaryErr) {
+      console.warn(`⚠️  [SCGRS Email] Primary SMTP delivery failed (${primaryErr.message}). Automatically switching to fallback test mailer...`);
     }
   }
 
-  // Try Ethereal (fake SMTP with preview URL) — requires internet access
+  // 2. Fallback: Ethereal test account
   try {
     const testAccount = await nodemailer.createTestAccount();
-    return nodemailer.createTransport({
+    const fallbackTransporter = nodemailer.createTransport({
       host: 'smtp.ethereal.email',
       port: 587,
       secure: false,
       auth: { user: testAccount.user, pass: testAccount.pass },
-      tls: {
-        rejectUnauthorized: false
-      }
+      tls: { rejectUnauthorized: false }
     });
-  } catch (etherealErr) {
-    // Ethereal unreachable (offline / API down) — fall back to console-only mock
-    console.warn('⚠️  [SCGRS Email] Ethereal SMTP unavailable, using console mock transporter:', etherealErr.message);
+
+    const info = await fallbackTransporter.sendMail({
+      ...mailOptions,
+      from: mailOptions.from || testAccount.user
+    });
+
+    const previewUrl = nodemailer.getTestMessageUrl(info) || 'https://ethereal.email/messages';
+    console.log(`📧 [SCGRS Email Fallback] Delivered via Ethereal test account: ${previewUrl}`);
     return {
-      sendMail: async (opts) => {
-        console.log('\n📧 ─── [SCGRS EMAIL MOCK] ─────────────────────────────────');
-        console.log(`  To      : ${opts.to}`);
-        console.log(`  From    : ${opts.from}`);
-        console.log(`  Subject : ${opts.subject}`);
-        console.log('  (HTML body omitted — set EMAIL_USER + EMAIL_PASS in .env for real delivery)');
-        console.log('──────────────────────────────────────────────────────────\n');
-        // Return a fake info object so getTestMessageUrl() returns null gracefully
-        return { messageId: `mock-${Date.now()}@scgrs.local`, accepted: [opts.to], rejected: [] };
-      }
+      success: true,
+      mode: 'ethereal',
+      fallback: true,
+      previewUrl,
+      warning: 'Delivered via simulated test mailer (Check Google App Password in backend/.env for real delivery)'
+    };
+  } catch (etherealErr) {
+    // 3. Fallback: Console Mock (offline or blocked network)
+    console.log('\n📧 ─── [SCGRS SIMULATED EMAIL DELIVERY] ─────────────────────');
+    console.log(`  To      : ${mailOptions.to}`);
+    console.log(`  From    : ${mailOptions.from}`);
+    console.log(`  Subject : ${mailOptions.subject}`);
+    console.log('  Status  : Dispatched (simulated in local console)');
+    console.log('──────────────────────────────────────────────────────────\n');
+    return {
+      success: true,
+      mode: 'console',
+      fallback: true,
+      previewUrl: null,
+      warning: 'Dispatched in local simulation mode (SMTP connection rejected)'
     };
   }
 };
@@ -199,26 +241,84 @@ const sendStudentStatusNotification = async (complaint, student, previousStatus,
 </html>`;
 
   try {
-    const transporter = await createMailTransporter();
-    const mailOptions = {
+    const mailResult = await sendEmailWithFallback({
       from: process.env.EMAIL_FROM || '"Smart Campus Grievance System" <noreply@scgrs.campus.edu>',
       to: student.email,
       subject: `[SCGRS] Grievance Update: ${complaint.complaintId} is now ${newStatus}`,
       html: htmlBody
+    });
+    return {
+      success: true,
+      previewUrl: mailResult.previewUrl || null,
+      fallback: mailResult.fallback || false
     };
-
-    const info = await transporter.sendMail(mailOptions);
-    const previewUrl = nodemailer.getTestMessageUrl(info);
-    if (previewUrl) {
-      console.log(`📧 [SCGRS Student Email] Preview (Ethereal): ${previewUrl}`);
-    } else {
-      console.log(`📧 [SCGRS Student Email] Sent to student ${student.email} for complaint ${complaint.complaintId}`);
-    }
-    return { success: true, previewUrl: previewUrl || null };
   } catch (err) {
     console.error('⚠️ [SCGRS Student Email] Failed to send email:', err.message);
     return { success: false, error: err.message };
   }
+};
+
+const SUPPORTED_CATEGORIES = [
+  'Academic',
+  'Hostel',
+  'Transport',
+  'Infrastructure',
+  'Internet/Wi-Fi',
+  'Harassment',
+  'Ragging',
+  'Safety',
+  'Canteen Dish Issue',
+  'Other'
+];
+
+const ML_CONFIDENCE_THRESHOLD = parseFloat(process.env.ML_CATEGORY_CONFIDENCE_THRESHOLD || '0.70');
+const SEMANTIC_SIMILARITY_THRESHOLD = parseFloat(process.env.SEMANTIC_SIMILARITY_THRESHOLD || '0.45');
+
+/**
+ * Safe Category-Selection Policy (Requirement 5):
+ * 1. Apply mandatory safety overrides first (food safety, harassment, ragging, critical life-safety).
+ * 2. Use a valid deterministic AI category when sufficiently supported.
+ * 3. Otherwise, use ML-predicted category when confidence meets threshold (>= 0.70).
+ * 4. If neither is reliable, retain student's selected category (fallback to 'Other' if unsupported).
+ */
+const determineFinalCategory = ({ studentCategory, aiResults, issueType }) => {
+  const normStudentCat = SUPPORTED_CATEGORIES.includes(studentCategory) ? studentCategory : 'Other';
+
+  // 1. Mandatory safety overrides
+  if (aiResults?.isFoodSafetyOverride || issueType === 'FOREIGN_OBJECT' || issueType === 'HYGIENE') {
+    return 'Canteen Dish Issue';
+  }
+
+  const detCat = aiResults?.detectedCategory;
+  if (detCat && ['Harassment', 'Ragging', 'Safety'].includes(detCat) && aiResults?.priority === 'CRITICAL') {
+    return detCat;
+  }
+
+  // 2. Deterministic AI category when sufficiently supported
+  if (detCat && SUPPORTED_CATEGORIES.includes(detCat)) {
+    const hasStrongSupport = (aiResults?.matchedKeywords && aiResults.matchedKeywords.length >= 2) ||
+      (aiResults?.priority === 'HIGH' || aiResults?.priority === 'CRITICAL');
+    if (hasStrongSupport) {
+      return detCat;
+    }
+  }
+
+  // 3. ML-predicted category when confidence meets threshold
+  const mlAnalysis = aiResults?.mlAnalysis;
+  const mlCat = mlAnalysis?.predicted_category;
+  const mlConf = typeof mlAnalysis?.confidence === 'number' ? mlAnalysis.confidence : 0;
+
+  if (mlCat && SUPPORTED_CATEGORIES.includes(mlCat) && mlConf >= ML_CONFIDENCE_THRESHOLD) {
+    return mlCat;
+  }
+
+  // If deterministic AI category was identified and student selected generic 'Other'
+  if (detCat && SUPPORTED_CATEGORIES.includes(detCat) && normStudentCat === 'Other') {
+    return detCat;
+  }
+
+  // 4. Retain student's selected category
+  return normStudentCat;
 };
 
 const getAssignedDepartment = (category) => {
@@ -422,57 +522,44 @@ const loadKeywordDataset = () => {
 const KEYWORD_SEVERITY = loadKeywordDataset();
 
 const localAIAnalyze = (text, eventDate = null, issueType = null) => {
-  const lowercaseText = (text || '').toLowerCase().replace(/[^\w\s]/g, '');
-  let maxWeight = 0;
+  const lowercaseText = (text || '').toLowerCase().replace(/[^\w\s]/g, ' ');
+  let totalWeight = 0;
   const matchedKeywords = [];
   let detectedCategory = null;
   let assignedDepartment = null;
 
-  for (const item of KEYWORD_SEVERITY) {
-    const cleanKw = item.word.toLowerCase().replace(/[^\w\s]/g, '');
-    if (cleanKw && lowercaseText.includes(cleanKw)) {
-      const regex = new RegExp(`\\b${cleanKw}\\b`);
-      if (regex.test(lowercaseText)) {
-        matchedKeywords.push(item.word);
-        if (item.weight > maxWeight) {
-          maxWeight = item.weight;
-          detectedCategory = item.category;
-          assignedDepartment = item.department;
-        }
+  // Exact matching with longer phrases first
+  const sortedKeywords = [...KEYWORD_SEVERITY].sort((a, b) => b.word.length - a.word.length);
+  const matchedSpans = [];
+
+  for (const item of sortedKeywords) {
+    const cleanKw = item.word.toLowerCase().replace(/[^\w\s]/g, ' ').trim();
+    if (!cleanKw) continue;
+
+    const regex = new RegExp(`\\b${cleanKw}\\b`, 'g');
+    let match;
+    while ((match = regex.exec(lowercaseText)) !== null) {
+      const start = match.index;
+      const end = start + match[0].length;
+      // Skip if already covered by longer phrase
+      if (matchedSpans.some(([s, e]) => s <= start && end <= e)) {
+        continue;
+      }
+      matchedSpans.push([start, end]);
+      matchedKeywords.push(item.word);
+      totalWeight += item.weight;
+      if (!detectedCategory || item.weight >= 25) {
+        detectedCategory = item.category;
+        assignedDepartment = item.department;
       }
     }
   }
 
-  let isPastEvent = false;
-  if (eventDate) {
-    try {
-      const datePart = eventDate.split('T')[0];
-      const parsedDate = new Date(datePart);
-      if (parsedDate < new Date()) {
-        isPastEvent = true;
-      }
-    } catch (e) {}
-  }
-
-  if (isPastEvent && maxWeight < 25) {
-    maxWeight = Math.max(maxWeight, 25);
-  }
-
-  let basePriority = 'LOW';
-  if (maxWeight >= 35) basePriority = 'CRITICAL';
-  else if (maxWeight >= 25) basePriority = 'HIGH';
-  else if (maxWeight >= 15) basePriority = 'MEDIUM';
-  else basePriority = 'LOW';
-
-  let baseScore = maxWeight > 0 ? maxWeight / 50.0 : 0.15;
-  if (isPastEvent && baseScore < 0.70) {
-    baseScore = 0.70;
-  }
-
+  // Sentiment analysis (Recorded separately; does NOT modify priority score)
   const negWords = ["not", "bad", "worst", "broken", "terrible", "unsafe", "scared", "afraid", "harassed", "fail", "delay", "poor", "unhappy", "angry", "frustrated", "disappointed", "slow", "failed", "error", "issue", "problem", "hate", "no", "harassment", "ragging", "violence", "abuse", "threat", "emergency", "rejected", "unapproved", "pending", "missing"];
   const posWords = ["good", "great", "excellent", "happy", "satisfied", "solved", "fixed", "nice", "helpful", "thanks", "thank", "love", "awesome", "perfect", "resolved", "approved"];
   
-  const words = lowercaseText.split(/\s+/);
+  const words = lowercaseText.split(/\s+/).filter(Boolean);
   let negCount = 0;
   let posCount = 0;
   for (const w of words) {
@@ -488,65 +575,60 @@ const localAIAnalyze = (text, eventDate = null, issueType = null) => {
     else if (sentimentScore < -0.15) sentimentLabel = "NEGATIVE";
   }
 
-  let finalScore = baseScore;
-  if (sentimentLabel === "NEGATIVE") finalScore += 0.10;
-  else if (sentimentLabel === "POSITIVE") finalScore -= 0.10;
+  // Food-Safety Overrides (serious food safety vs high food hygiene)
+  const seriousFoodKeywords = ["foreign object", "cockroach", "insect", "poison", "food poisoning", "hair in food", "glass in food"];
+  const highFoodKeywords = ["hygiene", "stale food", "dirty food", "unhygienic", "spoiled food"];
 
-  finalScore = Math.max(0.05, Math.min(0.99, finalScore));
+  const hasSeriousFood = issueType === 'FOREIGN_OBJECT' || seriousFoodKeywords.some(kw => new RegExp(`\\b${kw.replace(/[^\w\s]/g, '')}\\b`).test(lowercaseText));
+  const hasHighHygiene = (issueType === 'HYGIENE' || highFoodKeywords.some(kw => new RegExp(`\\b${kw.replace(/[^\w\s]/g, '')}\\b`).test(lowercaseText))) && !hasSeriousFood;
+  const foodSafetyOverride = hasSeriousFood || hasHighHygiene;
 
-  let foodSafetyOverride = false;
-  let overridePriority = null;
-  const criticalFoodKeywords = ["foreign object", "cockroach", "insect", "poison", "hair in food", "glass in food"];
-  const highFoodKeywords = ["hygiene", "stale food", "dirty food", "unhygiene", "spoiled food"];
-
-  const hasCriticalFood = issueType === 'FOREIGN_OBJECT' || criticalFoodKeywords.some(kw => new RegExp(`\\b${kw.replace(/[^\w\s]/g, '')}\\b`).test(lowercaseText));
-  const hasHighFood = issueType === 'HYGIENE' || highFoodKeywords.some(kw => new RegExp(`\\b${kw.replace(/[^\w\s]/g, '')}\\b`).test(lowercaseText));
-
-  if (hasCriticalFood) {
-    foodSafetyOverride = true;
-    overridePriority = 'CRITICAL';
-    finalScore = 0.90;
-    if (!detectedCategory) detectedCategory = "Canteen Dish Issue";
-    if (!assignedDepartment) assignedDepartment = "Canteen & Hospitality";
-  } else if (hasHighFood) {
-    foodSafetyOverride = true;
-    overridePriority = 'HIGH';
-    finalScore = Math.max(finalScore, 0.75);
-    if (!detectedCategory) detectedCategory = "Canteen Dish Issue";
-    if (!assignedDepartment) assignedDepartment = "Canteen & Hospitality";
+  if (foodSafetyOverride) {
+    detectedCategory = "Canteen Dish Issue";
+    assignedDepartment = "Canteen & Hospitality";
   }
 
-  let priority = basePriority;
-  if (foodSafetyOverride) {
-    priority = overridePriority;
+  // Priority determination aligned with Python engine:
+  // LOW: 0-39, MEDIUM: 40-59, HIGH: 60-79, CRITICAL: 80+
+  let priority = 'LOW';
+  let confidencePercent = 30;
+
+  if (hasSeriousFood) {
+    priority = 'CRITICAL';
+    confidencePercent = Math.min(98, 92 + (matchedKeywords.length * 2));
+  } else if (hasHighHygiene) {
+    priority = totalWeight >= 80 ? 'CRITICAL' : 'HIGH';
+    confidencePercent = Math.min(87, Math.max(76, Math.round(76 + (Math.min(totalWeight, 60) / 60.0) * 11)));
+  } else if (totalWeight >= 80) {
+    priority = 'CRITICAL';
+    confidencePercent = Math.min(98, Math.max(88, Math.round(88 + ((totalWeight - 80) / 40.0) * 10)));
+  } else if (totalWeight >= 60) {
+    priority = 'HIGH';
+    confidencePercent = Math.min(87, Math.max(76, Math.round(76 + ((totalWeight - 60) / 20.0) * 11)));
+  } else if (totalWeight >= 40) {
+    priority = 'MEDIUM';
+    confidencePercent = Math.min(75, Math.max(62, Math.round(62 + ((totalWeight - 40) / 20.0) * 13)));
   } else {
-    if (finalScore >= 0.70) priority = "CRITICAL";
-    else if (finalScore >= 0.50) priority = "HIGH";
-    else if (finalScore >= 0.30) priority = "MEDIUM";
-    else priority = "LOW";
+    priority = 'LOW';
+    confidencePercent = totalWeight > 0 ? Math.min(60, Math.max(45, Math.round(45 + (totalWeight / 40.0) * 15))) : 30;
   }
 
-  const confidencePercent = Math.min(100, Math.max(5, Math.round(finalScore * 100)));
-  
+  const finalScore = round(confidencePercent / 100.0, 2);
+
   let reason = "";
-  if (foodSafetyOverride) {
-    reason = `[ALERT] Food Safety Priority Override: Escalated due to health and food safety concern (${issueType || priority}).`;
+  if (hasSeriousFood) {
+    reason = `[ALERT] Food Safety Override: Critical health hazard detected in Canteen Dish Issue category (${issueType || priority}) — auto-escalated to CRITICAL.`;
+  } else if (hasHighHygiene) {
+    reason = `[ALERT] Food Hygiene Override: Significant food hygiene concern detected in Canteen Dish Issue category — escalated to HIGH priority.`;
   } else if (matchedKeywords.length > 0) {
     reason = `Urgency keywords detected: ${matchedKeywords.slice(0, 3).map(k => `'${k}'`).join(', ')}.`;
   } else {
     reason = "General vocabulary detected with neutral context.";
   }
 
-  if (isPastEvent) {
-    reason += " [ALERT] Time-sensitive OD escalation: Event date has already passed.";
-  }
-  if (sentimentLabel === "NEGATIVE") {
-    reason += " Sentiment is negative, indicating high frustration.";
-  }
-
   return {
     priority,
-    score: round(finalScore, 2),
+    score: finalScore,
     confidencePercent,
     matchedKeywords,
     sentiment: sentimentLabel,
@@ -610,8 +692,15 @@ exports.createComplaint = async (req, res) => {
       aiResults.confidencePercent = Math.min(100, Math.round((aiResults.score || 0.2) * 100));
     }
 
-    // Dynamic routing & SLA calculation
-    const department = getAssignedDepartment(category);
+    // Safe Category-Selection Policy (Requirement 5)
+    const finalCategory = determineFinalCategory({
+      studentCategory: category,
+      aiResults,
+      issueType
+    });
+
+    // Dynamic routing & SLA calculation based on finalCategory
+    const department = getAssignedDepartment(finalCategory);
     const slaDeadline = calculateSLADeadline(aiResults.priority);
 
     // Sequence calculation
@@ -620,7 +709,7 @@ exports.createComplaint = async (req, res) => {
     const complaintId = `SCGRS-${currentYear}-${String(count + 1).padStart(4, '0')}`;
 
     // ── Novelty 3: Duplicate & Recurring-Issue Clustering ─────────────────────
-    // Check open complaints with the same category
+    // Check open complaints with the finalCategory
     let isDuplicate = false;
     let parentComplaintId = null;
 
@@ -637,7 +726,7 @@ exports.createComplaint = async (req, res) => {
     if (newTokens.size > 0) {
       const openCandidates = await Complaint.find({
         status: { $nin: ['RESOLVED', 'CLOSED'] },
-        category: category,
+        category: finalCategory,
         isDuplicate: false
       });
 
@@ -684,7 +773,7 @@ exports.createComplaint = async (req, res) => {
       studentId,
       title,
       description,
-      category,
+      category: finalCategory,
       priority: aiResults.priority,
       priorityScore: aiResults.score,
       confidencePercent: aiResults.confidencePercent,
@@ -1071,30 +1160,17 @@ exports.notifyOfficer = async (req, res) => {
 </body>
 </html>`;
 
-    let info;
-    let previewUrl = null;
+    let mailResult;
     try {
-      const transporter = await createMailTransporter();
-      const mailOptions = {
+      mailResult = await sendEmailWithFallback({
         from: process.env.EMAIL_FROM || '"Smart Campus Grievance System" <noreply@scgrs.campus.edu>',
         to: assignedOfficer.email,
         subject: `[SCGRS] Grievance Assignment — ${complaint.complaintId} (${complaint.priority} Priority)`,
         html: htmlBody
-      };
-
-      info = await transporter.sendMail(mailOptions);
-      previewUrl = nodemailer.getTestMessageUrl(info);
-      if (previewUrl) {
-        console.log(`📧 [SCGRS Notify] Email preview (Ethereal): ${previewUrl}`);
-      } else {
-        console.log(`📧 [SCGRS Notify] Email dispatched to ${assignedOfficer.email}`);
-      }
-    } catch (mailErr) {
-      console.warn('⚠️ [SCGRS Notify] SMTP delivery issue:', mailErr.message);
-      return res.status(502).json({
-        message: 'Email sending failed: ' + mailErr.message + '. Check SMTP credentials in backend/.env',
-        error: mailErr.message
       });
+    } catch (mailErr) {
+      console.warn('⚠️ [SCGRS Notify] Fallback issue:', mailErr.message);
+      mailResult = { fallback: true, warning: mailErr.message, mode: 'console' };
     }
 
     // Persist notification status
@@ -1103,9 +1179,13 @@ exports.notifyOfficer = async (req, res) => {
     await complaint.save();
 
     res.status(200).json({
-      message: `Notification email dispatched to ${assignedOfficer.email}`,
+      message: mailResult && mailResult.fallback
+        ? `Notification recorded in test mode for ${assignedOfficer.email}`
+        : `Notification email dispatched to ${assignedOfficer.email}`,
       notifiedAt: complaint.assignedOfficer.notifiedAt,
-      previewUrl: previewUrl || null,
+      previewUrl: (mailResult && mailResult.previewUrl) || null,
+      fallback: (mailResult && mailResult.fallback) || false,
+      warning: (mailResult && mailResult.warning) || null,
       complaint
     });
   } catch (error) {
@@ -1595,8 +1675,9 @@ exports.runAutomatedSLAChecks = runAutomatedSLAChecks;
 // ── Novelty 3: Real-Time Duplicate Check Endpoint for Submission Form ──────
 exports.checkDuplicateComplaint = async (req, res) => {
   try {
-    const { text, title, category, location } = req.body;
-    const searchText = `${title || ''} ${text || ''}`.trim();
+    const { text, description, title, category, location } = req.body;
+    const descText = text || description || '';
+    const searchText = `${title || ''} ${descText}`.trim();
     if (!searchText || searchText.length < 5) {
       return res.status(200).json({ hasDuplicate: false, matches: [] });
     }
@@ -1617,7 +1698,7 @@ exports.checkDuplicateComplaint = async (req, res) => {
     const query = {
       status: { $nin: ['RESOLVED', 'CLOSED'] }
     };
-    if (category) {
+    if (category && category !== 'Other') {
       query.category = category;
     }
 
@@ -1626,33 +1707,75 @@ exports.checkDuplicateComplaint = async (req, res) => {
       .sort({ createdAt: -1 })
       .limit(40);
 
+    if (candidates.length === 0) {
+      return res.status(200).json({ hasDuplicate: false, matches: [] });
+    }
+
+    // Novelty: Call Python AI Semantic Similarity endpoint (Requirement 6)
+    const semanticMatchesMap = new Map();
+    try {
+      const candidatePayload = candidates.map(c => ({
+        id: c._id.toString(),
+        text: `${c.title}. ${c.description}`
+      }));
+
+      const aiSemRes = await axios.post(
+        `${process.env.AI_SERVICE_URL || 'http://127.0.0.1:5000'}/api/ai/semantic-similarity`,
+        {
+          query: searchText,
+          candidates: candidatePayload,
+          threshold: SEMANTIC_SIMILARITY_THRESHOLD
+        },
+        { timeout: 2500 }
+      );
+
+      if (aiSemRes.data?.matches && Array.isArray(aiSemRes.data.matches)) {
+        for (const m of aiSemRes.data.matches) {
+          semanticMatchesMap.set(m.id, m);
+        }
+      }
+    } catch (semErr) {
+      // Graceful fallback to lexical matching when AI service is offline or loading
+      console.warn('Semantic similarity microservice unavailable, using lexical fallback:', semErr.message);
+    }
+
     const matches = [];
     const newTokensSet = new Set(newTokens);
 
     for (const cand of candidates) {
       const candTokens = getTokens(`${cand.title} ${cand.description}`);
-      if (candTokens.length === 0) continue;
-
       let commonCount = 0;
       for (const tok of candTokens) {
         if (newTokensSet.has(tok)) commonCount++;
       }
 
-      // Jaccard similarity
-      const candTokensSet = new Set(candTokens);
-      const union = new Set([...newTokensSet, ...candTokensSet]);
-      let jaccard = union.size > 0 ? (commonCount / union.size) : 0;
-
-      // Location match bonus
       const sameLocation = location && cand.location &&
         location.trim().toLowerCase() === cand.location.trim().toLowerCase();
-      if (sameLocation) {
-        jaccard += 0.25;
+
+      // Check if candidate matched via Semantic Similarity
+      const semMatch = semanticMatchesMap.get(cand._id.toString());
+      let similarityPercent = 0;
+      let isDuplicateCandidate = false;
+
+      if (semMatch) {
+        let sim = semMatch.similarity;
+        if (sameLocation) sim = Math.min(0.99, sim + 0.10);
+        similarityPercent = Math.min(99, Math.round(sim * 100));
+        isDuplicateCandidate = true;
+      } else if (candTokens.length > 0) {
+        // Lexical Jaccard & token overlap fallback
+        const candTokensSet = new Set(candTokens);
+        const union = new Set([...newTokensSet, ...candTokensSet]);
+        let jaccard = union.size > 0 ? (commonCount / union.size) : 0;
+        if (sameLocation) jaccard += 0.25;
+
+        if (commonCount >= 2 && (jaccard >= 0.18 || sameLocation)) {
+          similarityPercent = Math.min(98, Math.round(Math.max(jaccard, (commonCount / Math.max(newTokens.length, 1))) * 100));
+          isDuplicateCandidate = true;
+        }
       }
 
-      // If common words >= 2 and reasonable overlap
-      if (commonCount >= 2 && (jaccard >= 0.18 || sameLocation)) {
-        const similarityPercent = Math.min(98, Math.round(Math.max(jaccard, (commonCount / Math.max(newTokens.length, 1))) * 100));
+      if (isDuplicateCandidate && similarityPercent >= 40) {
         matches.push({
           id: cand._id,
           complaintId: cand.complaintId,
@@ -1664,7 +1787,8 @@ exports.checkDuplicateComplaint = async (req, res) => {
           priority: cand.priority,
           affectedStudentCount: cand.affectedStudentCount || 1,
           alreadyUpvoted: cand.upvotedStudents && req.user ? cand.upvotedStudents.some(u => u.toString() === req.user.id) : false,
-          similarity: similarityPercent
+          similarity: similarityPercent,
+          matchType: semMatch ? 'semantic' : 'lexical'
         });
       }
     }

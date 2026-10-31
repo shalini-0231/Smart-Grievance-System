@@ -21,7 +21,7 @@ def query_campus_ai(message, role='student', user_context=None):
     # 2. SLA Escalation Timeframes & Rules
     elif any(k in clean for k in ['sla', 'escalat', 'deadline', 'timeframe', 'timer', 'overdue']):
         return {
-            "answer": "⚡ **Automatic SLA & Escalation Timeframes**: \n\n• 🚨 **CRITICAL Priority**: 24 Hours SLA (Escalates directly to Director)\n• 🔴 **HIGH Priority**: 48 Hours SLA (Escalates to Head of Department)\n• 🟡 **MEDIUM Priority**: 72 Hours SLA (Escalates to Committee Lead)\n• 🟢 **LOW Priority**: 120 Hours SLA\n\n⏰ *If unresolved within the SLA timer, complaints are automatically escalated to higher management.*",
+            "answer": "⚡ **Automatic SLA & Escalation Timeframes**: \n\n• 🚨 **CRITICAL Priority**: 4 Hours SLA (Escalates directly to Director / Senior Authority)\n• 🔴 **HIGH Priority**: 24 Hours SLA (Escalates to Head of Department)\n• 🟡 **MEDIUM Priority**: 48 Hours SLA (Escalates to Committee Lead)\n• 🟢 **LOW Priority**: 72 Hours SLA\n\n⏰ *If unresolved within the SLA timer, complaints are automatically escalated to higher management.*",
             "action": "OPEN_TRACKER",
             "quickReplies": ["Track active complaints", "File a Complaint"]
         }
