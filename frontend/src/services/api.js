@@ -1,3 +1,5 @@
+import { normalizeCampusSpeech } from '../utils/speechNormalizer';
+
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5001/api';
 
 const getHeaders = () => {
@@ -210,6 +212,85 @@ export const api = {
     return handleResponse(res);
   },
 
+  // Voice complaint processor: Identifies category and automatically generates detailed description
+  processVoiceComplaint: async (rawText, lang = 'en-IN') => {
+    const text = normalizeCampusSpeech(rawText);
+    try {
+      const res = await fetch(`${BASE_URL}/complaints/ai/voice-process`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ text, lang })
+      });
+      if (res.ok) {
+        return await handleResponse(res);
+      }
+    } catch (e) {
+      console.warn('Backend voice-process proxy offline, checking direct AI microservice:', e.message);
+    }
+
+    // Direct Flask Microservice call
+    try {
+      const directRes = await fetch('http://127.0.0.1:5000/api/ai/voice-process', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, lang })
+      });
+      if (directRes.ok) {
+        return await directRes.json();
+      }
+    } catch (e2) {
+      console.warn('Direct AI microservice offline, using client-side fallback generator:', e2.message);
+    }
+
+    // Client-side fallback: Guaranteed zero-dependency generation
+    return api.getLocalVoiceProcessing(text);
+  },
+
+  getLocalVoiceProcessing: (text) => {
+    const normalized = normalizeCampusSpeech(text);
+    const clean = (normalized || '').toLowerCase().trim();
+    let category = 'Other';
+
+    if (/canteen|mess|food|dish|biryani|tea|hygiene|taste|உணவு|சாப்பாடு|கேண்டீன்|மெஸ்/.test(clean)) {
+      category = 'Canteen Dish Issue';
+    } else if (/wifi|wi-fi|internet|speed|network|router|வைஃபை|இணையம்|நெட்/.test(clean)) {
+      category = 'Internet/Wi-Fi';
+    } else if (/bus|transport|driver|route|shuttle|பேருந்து|பஸ்/.test(clean)) {
+      category = 'Transport';
+    } else if (/hostel|room|bed|bathroom|washroom|geyser|விடுதி|தங்குமிடம்|ஹோஸ்டல்|ரூம்/.test(clean)) {
+      category = 'Hostel';
+    } else if (/fan|light|door|window|leak|water|bench|chair|projector|ac|மின்விசிறி|விளக்கு|மேஜை|ஃபேன்|லைட்|பெஞ்ச்|லிப்ட்/.test(clean)) {
+      category = 'Infrastructure';
+    } else if (/exam|mark|grade|result|faculty|attendance|syllabus|professor|தேர்வு|மதிப்பெண்|எக்ஸாம்|மார்க்/.test(clean)) {
+      category = 'Academic';
+    } else if (/ragging|rag|seniors|ராகிங்/.test(clean)) {
+      category = 'Ragging';
+    } else if (/harass|threat|bully|துன்புறுத்தல்/.test(clean)) {
+      category = 'Harassment';
+    } else if (/safety|hazard|fire|emergency|பாதுகாப்பு|தீ/.test(clean)) {
+      category = 'Safety';
+    }
+
+    const isTamil = /[\u0B80-\u0BFF]/.test(text || '');
+    let description = '';
+
+    if (isTamil) {
+      description = `புகார் விவரம் (Grievance Description):\n${text}\n\nதுறை மற்றும் தாக்கம் (Department & Impact):\nமேற்குறிப்பிட்ட பிரச்சனை '${category}' பிரிவைச் சார்ந்தது. இது மாணவர்களின் அன்றாட வளாக நடைமுறைகளை பாதிக்கிறது.\n\nகோரிக்கை (Requested Action):\nமாணவர்களின் நலன் கருதி, இப்பிரச்சனையை உடனடியாக ஆய்வு செய்து தகுந்த தீர்வு காணுமாறு கேட்டுக்கொள்கிறேன்.`;
+    } else {
+      const cleanText = (text || '').trim();
+      const capitalized = cleanText ? (cleanText.charAt(0).toUpperCase() + cleanText.slice(1)) : '';
+      const sentence = capitalized.endsWith('.') ? capitalized : (capitalized ? capitalized + '.' : '');
+      description = `Grievance Summary:\n${sentence}\n\nContext & Impact:\nThe issue described above has been reported under the '${category}' category. This condition is causing disruption to daily campus activities.\n\nRequested Action:\nKindly inspect the reported location/equipment, verify ground conditions, and initiate the necessary corrective measures at the earliest.`;
+    }
+
+    return {
+      title: text || '',
+      category,
+      description: description || text || '',
+      confidence: 0.8
+    };
+  },
+
   // Guided Chatbot question engine with local fallback
   getNextQuestion: async (text, category, step) => {
     try {
@@ -317,6 +398,147 @@ export const api = {
     const res = await fetch(`${BASE_URL}/notifications/read-all`, {
       method: 'PUT',
       headers: getHeaders()
+    });
+    return handleResponse(res);
+  },
+
+  // Module 3: Officer Management
+  createOfficer: async (officerData) => {
+    const res = await fetch(`${BASE_URL}/officers`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify(officerData)
+    });
+    return handleResponse(res);
+  },
+
+  updateOfficer: async (id, officerData) => {
+    const res = await fetch(`${BASE_URL}/officers/${id}`, {
+      method: 'PUT',
+      headers: getHeaders(),
+      body: JSON.stringify(officerData)
+    });
+    return handleResponse(res);
+  },
+
+  toggleOfficerStatus: async (id) => {
+    const res = await fetch(`${BASE_URL}/officers/${id}/status`, {
+      method: 'PUT',
+      headers: getHeaders()
+    });
+    return handleResponse(res);
+  },
+
+  deleteOfficer: async (id) => {
+    const res = await fetch(`${BASE_URL}/officers/${id}`, {
+      method: 'DELETE',
+      headers: getHeaders()
+    });
+    return handleResponse(res);
+  },
+
+  // Module 4: SLA Escalation to Higher Authority
+  escalateToAuthority: async (id, data = {}) => {
+    const res = await fetch(`${BASE_URL}/complaints/${id}/escalate-authority`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify(data)
+    });
+    return handleResponse(res);
+  },
+
+  // Module 6: User Management
+  getAllUsers: async () => {
+    const res = await fetch(`${BASE_URL}/auth/users`, {
+      method: 'GET',
+      headers: getHeaders()
+    });
+    return handleResponse(res);
+  },
+
+  toggleUserStatus: async (id) => {
+    const res = await fetch(`${BASE_URL}/auth/users/${id}/status`, {
+      method: 'PUT',
+      headers: getHeaders()
+    });
+    return handleResponse(res);
+  },
+
+  updateUserRole: async (id, role, department) => {
+    const res = await fetch(`${BASE_URL}/auth/users/${id}/role`, {
+      method: 'PUT',
+      headers: getHeaders(),
+      body: JSON.stringify({ role, department })
+    });
+    return handleResponse(res);
+  },
+
+  createUser: async (userData) => {
+    const res = await fetch(`${BASE_URL}/auth/users`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify(userData)
+    });
+    return handleResponse(res);
+  },
+
+  updateUserDetails: async (id, userData) => {
+    const res = await fetch(`${BASE_URL}/auth/users/${id}`, {
+      method: 'PUT',
+      headers: getHeaders(),
+      body: JSON.stringify(userData)
+    });
+    return handleResponse(res);
+  },
+
+  deleteUser: async (id) => {
+    const res = await fetch(`${BASE_URL}/auth/users/${id}`, {
+      method: 'DELETE',
+      headers: getHeaders()
+    });
+    return handleResponse(res);
+  },
+
+  // Module 7: Reports and Feedback
+  getExecutiveReports: async (month, year) => {
+    const q = new URLSearchParams();
+    if (month) q.append('month', month);
+    if (year) q.append('year', year);
+    const qs = q.toString() ? `?${q.toString()}` : '';
+    const res = await fetch(`${BASE_URL}/complaints/reports/executive${qs}`, {
+      method: 'GET',
+      headers: getHeaders()
+    });
+    return handleResponse(res);
+  },
+
+  getAllFeedback: async () => {
+    const res = await fetch(`${BASE_URL}/complaints/feedback/all`, {
+      method: 'GET',
+      headers: getHeaders()
+    });
+    return handleResponse(res);
+  },
+
+  // Module 8: Notification Management
+  getAllNotificationsAdmin: async (queryParams = {}) => {
+    const q = new URLSearchParams();
+    Object.entries(queryParams).forEach(([k, v]) => {
+      if (v !== undefined && v !== '') q.append(k, v);
+    });
+    const qs = q.toString() ? `?${q.toString()}` : '';
+    const res = await fetch(`${BASE_URL}/notifications/all${qs}`, {
+      method: 'GET',
+      headers: getHeaders()
+    });
+    return handleResponse(res);
+  },
+
+  broadcastAnnouncement: async (data) => {
+    const res = await fetch(`${BASE_URL}/notifications/broadcast`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify(data)
     });
     return handleResponse(res);
   }

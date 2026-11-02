@@ -18,13 +18,28 @@ const OfficerSchema = new mongoose.Schema({
     type: String,
     default: 'Department Officer'
   },
+  designation: {
+    type: String,
+    default: 'Department Officer'
+  },
   contact: {
+    type: String,
+    default: ''
+  },
+  phone: {
     type: String,
     default: ''
   },
   email: {
     type: String,
-    default: ''
+    required: true,
+    unique: true,
+    trim: true,
+    lowercase: true
+  },
+  isActive: {
+    type: Boolean,
+    default: true
   },
   openTicketCount: {
     type: Number,

@@ -1,9 +1,12 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
 import { useToast } from '../context/ToastContext';
+import { useLanguage } from '../context/LanguageContext';
+import { normalizeCampusSpeech } from '../utils/speechNormalizer';
 import { 
-  Send, AlertTriangle, ArrowLeft, Brain, Sparkles, FileText, CheckCircle2, Users, ThumbsUp
+  Send, AlertTriangle, ArrowLeft, Brain, Sparkles, FileText, CheckCircle2, Users, ThumbsUp,
+  Mic, Square, XCircle, Languages, AlertCircle
 } from 'lucide-react';
 
 const categories = [
@@ -51,23 +54,44 @@ const SubmitComplaint = () => {
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [mode, setMode] = useState('quick'); // 'quick' | 'guided'
   const navigate = useNavigate();
   const { addToast } = useToast();
+  const { language, t } = useLanguage();
 
-  const updateFormData = (fields) => {
-    if (fields.title !== undefined) setTitle(fields.title);
-    if (fields.description !== undefined) setDescription(fields.description);
-    if (fields.category !== undefined) setCategory(fields.category);
-    if (fields.locationName !== undefined) setLocationName(fields.locationName);
-    if (fields.attachment !== undefined) setAttachment(fields.attachment);
-    if (fields.anonymous !== undefined) setAnonymous(fields.anonymous);
-    if (fields.canteenLocation !== undefined) setCanteenLocation(fields.canteenLocation);
-    if (fields.dishName !== undefined) setDishName(fields.dishName);
-    if (fields.issueType !== undefined) setIssueType(fields.issueType);
-    if (fields.mealTime !== undefined) setMealTime(fields.mealTime);
-    if (fields.dishPhoto !== undefined) setDishPhoto(fields.dishPhoto);
-  };
+  // Speech-to-Text & Automatic Field Population State
+  const [isRecording, setIsRecording] = useState(false);
+  const [voiceLang, setVoiceLang] = useState(language === 'ta' ? 'ta-IN' : 'en-IN'); // Syncs with preferred language
+  const [speechError, setSpeechError] = useState('');
+  const [speechSupported, setSpeechSupported] = useState(true);
+  const [autoPopulating, setAutoPopulating] = useState(false);
+
+  useEffect(() => {
+    setVoiceLang(language === 'ta' ? 'ta-IN' : 'en-IN');
+  }, [language]);
+
+  const recognitionRef = useRef(null);
+  const isRecordingRef = useRef(false);
+  const isCancelledRef = useRef(false);
+  const preRecordingTextRef = useRef('');
+  const currentSpokenTextRef = useRef('');
+
+  // Check browser Web Speech API support and cleanup on unmount
+  useEffect(() => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setSpeechSupported(false);
+    }
+
+    return () => {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.abort();
+        } catch {
+          // ignore unmount abort error
+        }
+      }
+    };
+  }, []);
 
   // AI live preview state
   const [aiPreview, setAiPreview] = useState(null);
@@ -79,8 +103,11 @@ const SubmitComplaint = () => {
   const [upvotingId, setUpvotingId] = useState(null);
 
   // Trigger AI preview and Duplicate Detection when description changes
-  const triggerAIAnalysis = async () => {
-    if (description.trim().length < 8) {
+  const triggerAIAnalysis = async (overrideDesc, overrideCat) => {
+    const textToAnalyze = (overrideDesc !== undefined ? overrideDesc : description).trim();
+    const catToUse = overrideCat !== undefined ? overrideCat : category;
+
+    if (textToAnalyze.length < 8) {
       setAiPreview(null);
       setDuplicateWarning(null);
       return;
@@ -91,11 +118,11 @@ const SubmitComplaint = () => {
     try {
       const [aiRes, dupRes] = await Promise.allSettled([
         api.analyzeText(
-          description, 
+          textToAnalyze, 
           undefined,
-          category === 'Canteen Dish Issue' ? issueType : undefined
+          catToUse === 'Canteen Dish Issue' ? issueType : undefined
         ),
-        api.checkDuplicate(title, description, category, locationName)
+        api.checkDuplicate(title, textToAnalyze, catToUse, locationName)
       ]);
 
       if (aiRes.status === 'fulfilled') {
@@ -112,6 +139,185 @@ const SubmitComplaint = () => {
       setAiLoading(false);
       setCheckingDuplicates(false);
     }
+  };
+
+  // Automated Field Population Workflow after Voice Capture
+  const handleVoiceFinished = async (spokenText) => {
+    const cleanSpoken = normalizeCampusSpeech((spokenText || '').trim());
+    if (cleanSpoken.length < 3) return;
+
+    setAutoPopulating(true);
+    try {
+      const result = await api.processVoiceComplaint(cleanSpoken, voiceLang);
+      if (result) {
+        // 1. Automatically identify and select the matching Category
+        let matchedCat = result.category;
+        if (matchedCat && categories.includes(matchedCat)) {
+          setCategory(matchedCat);
+        } else {
+          matchedCat = category;
+        }
+
+        // 2. Automatically generate detailed description preserving original meaning
+        const generatedDesc = result.description || cleanSpoken;
+        setDescription(generatedDesc);
+
+        // 3. Immediately trigger Live AI Assessment on the generated description
+        triggerAIAnalysis(generatedDesc, matchedCat);
+
+        addToast('Voice captured! Category identified & Detailed Description auto-populated.', 'success');
+      }
+    } catch (err) {
+      console.warn('Voice auto-population error:', err.message);
+      // Fallback: If auto-generation unavailable, use recognized speech as description
+      if (!description || description.trim() === '') {
+        setDescription(cleanSpoken);
+        triggerAIAnalysis(cleanSpoken, category);
+      }
+    } finally {
+      setAutoPopulating(false);
+    }
+  };
+
+  // Speech Recognition Start Handler (Integrated into Complaint Title)
+  const startSpeechRecognition = () => {
+    setSpeechError('');
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setSpeechSupported(false);
+      setSpeechError('Speech recognition is not supported in this browser. Please use Google Chrome, Microsoft Edge, or Safari, or continue typing manually.');
+      return;
+    }
+
+    // Once we start to re-record, erase previous speech-to-text & generated fields for a clean slate
+    setTitle('');
+    setDescription('');
+    setAiPreview(null);
+    setDuplicateWarning(null);
+    preRecordingTextRef.current = '';
+    currentSpokenTextRef.current = '';
+    isCancelledRef.current = false;
+
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = voiceLang;
+      recognition.maxAlternatives = 3;
+
+      recognition.onstart = () => {
+        setIsRecording(true);
+        isRecordingRef.current = true;
+        setSpeechError('');
+      };
+
+      recognition.onresult = (event) => {
+        if (isCancelledRef.current) return;
+
+        let interimTranscript = '';
+        let finalTranscript = '';
+
+        // Prevent duplicate text by iterating through results and accumulating final & interim segments
+        for (let i = 0; i < event.results.length; i++) {
+          let transcriptChunk = event.results[i][0].transcript;
+
+          // Check alternatives: if an alternative has a known campus keyword that alt 0 missed, prefer it
+          for (let a = 1; a < event.results[i].length; a++) {
+            const altText = event.results[i][a].transcript;
+            if (/\b(wifi|wi-fi|mess|canteen|geyser|ragging|hostel)\b/i.test(altText) && !/\b(wifi|wi-fi|mess|canteen|geyser|ragging|hostel)\b/i.test(transcriptChunk)) {
+              transcriptChunk = altText;
+              break;
+            }
+          }
+
+          if (event.results[i].isFinal) {
+            finalTranscript += transcriptChunk + ' ';
+          } else {
+            interimTranscript += transcriptChunk;
+          }
+        }
+
+        const rawSpoken = (finalTranscript + interimTranscript).trim();
+        // Domain speech normalization: corrects acoustic confusions (e.g. wife -> Wi-Fi, mens -> mess)
+        const speechSpoken = normalizeCampusSpeech(rawSpoken);
+
+        // Update title and speech ref with the normalized campus speech
+        setTitle(speechSpoken);
+        currentSpokenTextRef.current = speechSpoken;
+      };
+
+      recognition.onerror = (event) => {
+        console.warn('Speech recognition error event:', event.error);
+        if (isCancelledRef.current) return;
+
+        if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+          setSpeechError('Microphone access was denied. Please allow microphone permissions in your browser site settings or address bar to use voice input.');
+        } else if (event.error === 'no-speech') {
+          setSpeechError('No speech was detected. Please check your microphone and speak clearly.');
+        } else if (event.error === 'audio-capture') {
+          setSpeechError('No microphone detected. Please connect or enable an audio input device.');
+        } else if (event.error === 'network') {
+          setSpeechError('Network error connecting to speech recognition service. Please check your internet connection.');
+        } else if (event.error !== 'aborted') {
+          setSpeechError(`Speech recognition issue: ${event.error}. You can continue typing manually.`);
+        }
+        setIsRecording(false);
+        isRecordingRef.current = false;
+      };
+
+      recognition.onend = () => {
+        setIsRecording(false);
+        isRecordingRef.current = false;
+        if (!isCancelledRef.current) {
+          const finalText = (currentSpokenTextRef.current || title || '').trim();
+          if (finalText.length >= 3) {
+            handleVoiceFinished(finalText);
+          }
+        }
+      };
+
+      recognitionRef.current = recognition;
+      recognition.start();
+    } catch (err) {
+      console.error('Failed to start speech recognition:', err);
+      setSpeechError('Could not start microphone. Please check browser permissions or continue typing manually.');
+      setIsRecording(false);
+      isRecordingRef.current = false;
+    }
+  };
+
+  // Speech Recognition Stop Handler
+  const stopSpeechRecognition = () => {
+    if (recognitionRef.current && isRecordingRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch (e) {
+        console.warn('Error stopping speech recognition:', e);
+      }
+    }
+    setIsRecording(false);
+    isRecordingRef.current = false;
+  };
+
+  // Speech Recognition Cancel Handler
+  const cancelSpeechRecognition = () => {
+    isCancelledRef.current = true;
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.abort();
+      } catch (e) {
+        console.warn('Error cancelling speech recognition:', e);
+      }
+    }
+    setTitle('');
+    setDescription('');
+    currentSpokenTextRef.current = '';
+    preRecordingTextRef.current = '';
+    setAiPreview(null);
+    setDuplicateWarning(null);
+    setIsRecording(false);
+    isRecordingRef.current = false;
+    setSpeechError('');
   };
 
   const handleUpvoteDuplicate = async (complaintId) => {
@@ -182,14 +388,16 @@ const SubmitComplaint = () => {
           onClick={() => navigate('/student/dashboard')}
           style={{ padding: '0.4rem 0.8rem', display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem' }}
         >
-          <ArrowLeft size={14} /> Back to Dashboard
+          <ArrowLeft size={14} /> {t('back')}
         </button>
       </div>
 
       <div className="dashboard-header">
         <div>
-          <h2>Submit Campus Grievance</h2>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Fill in details. Our AI engine will automatically evaluate priority and route to the correct committee.</p>
+          <h2>{t('submitForm.pageTitle')}</h2>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+            {t('submitForm.pageSubtitle')}
+          </p>
         </div>
       </div>
 
@@ -204,33 +412,198 @@ const SubmitComplaint = () => {
         {/* Form Column */}
         <div className="glass-card">
           <h3 style={{ marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            Grievance Form
+            {t('submitForm.grievanceForm')}
           </h3>
           <form onSubmit={handleSubmit}>
+            {/* 1. Complaint Title with Integrated Voice Input Controls */}
             <div className="form-group">
-              <label htmlFor="title">Complaint Title</label>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                <label htmlFor="title" style={{ margin: 0, fontWeight: 600 }}>
+                  {t('submitForm.complaintTitle')} <span style={{ color: 'var(--priority-critical)' }}>*</span>
+                </label>
+
+                {/* Voice Input Controls beside Complaint Title */}
+                <div className="voice-toolbar">
+                  {speechSupported ? (
+                    !isRecording ? (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                          <Languages size={14} style={{ color: 'var(--text-muted)' }} />
+                          <select
+                            id="voice-language-select"
+                            aria-label="Voice Input Language"
+                            className="voice-lang-select"
+                            value={voiceLang}
+                            onChange={(e) => setVoiceLang(e.target.value)}
+                            title="Select language for speech recognition"
+                          >
+                            <option value="en-IN">English (India)</option>
+                            <option value="ta-IN">தமிழ் / Tamil (India)</option>
+                          </select>
+                        </div>
+
+                        <button
+                          type="button"
+                          className="voice-btn-record"
+                          onClick={startSpeechRecognition}
+                          title={title ? `Click to re-record complaint in ${voiceLang === 'ta-IN' ? 'Tamil' : 'English'} (erases previous text)` : `Click to speak complaint in ${voiceLang === 'ta-IN' ? 'Tamil' : 'English'}`}
+                        >
+                          <Mic size={14} />
+                          <span>{title ? t('submitForm.reRecord') : t('submitForm.voiceInput')}</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <div className="voice-recording-badge">
+                          <span className="voice-recording-dot"></span>
+                          <span>{t('submitForm.listening')} ({voiceLang === 'ta-IN' ? 'Tamil' : 'English'})...</span>
+                        </div>
+
+                        <button
+                          type="button"
+                          className="voice-btn-stop"
+                          onClick={stopSpeechRecognition}
+                          title="Stop recording and auto-populate Category & Description"
+                        >
+                          <Square size={12} fill="currentColor" />
+                          <span>{t('submitForm.stop')}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          className="voice-btn-cancel"
+                          onClick={cancelSpeechRecognition}
+                          title="Cancel voice recording"
+                        >
+                          <XCircle size={14} />
+                          <span>{t('submitForm.cancelVoice')}</span>
+                        </button>
+                      </div>
+                    )
+                  ) : (
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }} title="Web Speech API not supported in this browser">
+                      🎙️ Voice input unavailable in this browser (type manually)
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Speech Recognition Error Banner */}
+              {speechError && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '0.5rem',
+                  padding: '0.5rem 0.75rem',
+                  marginBottom: '0.5rem',
+                  borderRadius: '6px',
+                  background: 'rgba(239, 68, 68, 0.12)',
+                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                  color: '#f87171',
+                  fontSize: '0.8rem'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <AlertCircle size={15} style={{ flexShrink: 0 }} />
+                    <span>{speechError}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSpeechError('')}
+                    style={{ background: 'transparent', border: 'none', color: '#f87171', cursor: 'pointer', padding: '2px', display: 'flex', alignItems: 'center' }}
+                    title="Dismiss notification"
+                  >
+                    <XCircle size={14} />
+                  </button>
+                </div>
+              )}
+
+              {/* Active Recording Banner */}
+              {isRecording && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  padding: '0.45rem 0.75rem',
+                  marginBottom: '0.5rem',
+                  borderRadius: '6px',
+                  background: 'rgba(59, 130, 246, 0.1)',
+                  border: '1px solid rgba(59, 130, 246, 0.3)',
+                  color: '#93c5fd',
+                  fontSize: '0.8rem'
+                }}>
+                  <span className="voice-recording-dot"></span>
+                  <span>
+                    Microphone active: Speak your complaint in <strong>{voiceLang === 'ta-IN' ? 'Tamil (தமிழ்)' : 'English'}</strong>. Your spoken words will populate the Title, and AI will automatically identify the Category and generate the Detailed Description. Click <strong>Stop</strong> when finished.
+                  </span>
+                </div>
+              )}
+
+              {/* Auto-Populating Status Banner */}
+              {autoPopulating && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  padding: '0.45rem 0.75rem',
+                  marginBottom: '0.5rem',
+                  borderRadius: '6px',
+                  background: 'rgba(6, 182, 212, 0.12)',
+                  border: '1px solid rgba(6, 182, 212, 0.3)',
+                  color: 'var(--accent-cyan)',
+                  fontSize: '0.8rem'
+                }}>
+                  <Sparkles size={15} />
+                  <span>AI analyzing spoken complaint: Identifying Category and generating Detailed Description...</span>
+                </div>
+              )}
+
               <input
                 type="text"
                 id="title"
                 className="form-control"
-                placeholder="Brief summary of the issue (e.g. Wi-Fi down, canteen food quality issue)"
+                placeholder={
+                  isRecording
+                    ? `Listening for ${voiceLang === 'ta-IN' ? 'Tamil' : 'English'} speech... Speak your complaint now.`
+                    : "Brief summary of the issue (e.g. Wi-Fi down in library, hostel water shortage)"
+                }
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 required
+                style={isRecording ? { borderColor: 'rgba(239, 68, 68, 0.5)', boxShadow: '0 0 10px rgba(239, 68, 68, 0.15)' } : {}}
               />
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginTop: '0.25rem' }}>
+                Tip: Speak in English or Tamil. Your voice populates the title, identifies the category, and generates the description automatically.
+              </p>
             </div>
 
+            {/* 2. Category Dropdown (Auto-Identified by AI, Editable by Student) */}
             <div className="form-group">
-              <label htmlFor="category">Category</label>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+                <label htmlFor="category" style={{ margin: 0, fontWeight: 600 }}>
+                  {t('submitForm.category')} <span style={{ color: 'var(--priority-critical)' }}>*</span>
+                </label>
+                {autoPopulating && (
+                  <span style={{ fontSize: '0.75rem', color: 'var(--accent-cyan)' }}>
+                    {language === 'ta' ? 'பிரிவு கண்டறியப்படுகிறது...' : 'Auto-identifying category...'}
+                  </span>
+                )}
+              </div>
               <select
                 id="category"
                 className="form-control"
                 value={category}
-                onChange={(e) => setCategory(e.target.value)}
+                onChange={(e) => {
+                  const newCat = e.target.value;
+                  setCategory(newCat);
+                  if (description.length >= 8) {
+                    triggerAIAnalysis(description, newCat);
+                  }
+                }}
                 required
               >
                 {categories.map((cat) => (
-                  <option key={cat} value={cat}>{cat}</option>
+                  <option key={cat} value={cat}>{t(`categories.${cat}`, cat)}</option>
                 ))}
               </select>
             </div>
@@ -337,43 +710,54 @@ const SubmitComplaint = () => {
             )}
 
             <div className="form-group">
-              <label htmlFor="location">Location / Building / Room No.</label>
+              <label htmlFor="location">{t('submitForm.location')}</label>
               <input
                 type="text"
                 id="location"
                 className="form-control"
-                placeholder="e.g. Academic Block 1 / Room 204"
+                placeholder={t('submitForm.locationPlaceholder')}
                 value={locationName}
                 onChange={(e) => setLocationName(e.target.value)}
               />
             </div>
 
             <div className="form-group">
-              <label htmlFor="attachment">Optional General Attachment</label>
+              <label htmlFor="attachment">{t('submitForm.attachment')}</label>
               <input
                 type="text"
                 id="attachment"
                 className="form-control"
-                placeholder="e.g. error_screenshot.png or photo_evidence.jpg"
+                placeholder={t('submitForm.attachmentPlaceholder')}
                 value={attachment}
                 onChange={(e) => setAttachment(e.target.value)}
               />
             </div>
 
+            {/* 3. Detailed Description (Auto-Populated from Voice, Fully Editable) */}
             <div className="form-group">
-              <label htmlFor="description">Detailed Description</label>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                <label htmlFor="description" style={{ margin: 0, fontWeight: 600 }}>
+                  {t('submitForm.detailedDescription')} <span style={{ color: 'var(--priority-critical)' }}>*</span>
+                </label>
+                {autoPopulating && (
+                  <span style={{ fontSize: '0.75rem', color: 'var(--accent-cyan)' }}>
+                    {language === 'ta' ? 'விளக்கம் உருவாக்கப்படுகிறது...' : 'Generating description...'}
+                  </span>
+                )}
+              </div>
+
               <textarea
                 id="description"
                 className="form-control"
-                rows="5"
-                placeholder="Explain the grievance in detail. Mention specific delays (e.g. mentor signed but counsellor delayed, attendance not updated)."
+                rows="6"
+                placeholder={t('submitForm.descriptionPlaceholder')}
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                onBlur={triggerAIAnalysis}
+                onBlur={() => triggerAIAnalysis()}
                 required
               />
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginTop: '0.25rem' }}>
-                Tip: Press outside the text area to trigger live AI preview & duplicate checks.
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginTop: '0.25rem', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+                <span>{t('submitForm.descriptionTip')}</span>
               </p>
             </div>
 
@@ -477,7 +861,7 @@ const SubmitComplaint = () => {
               disabled={loading}
             >
               <Send size={18} />
-              {loading ? 'Submitting...' : 'Submit Grievance'}
+              {loading ? t('submitForm.submittingButton') : t('submitForm.submitButton')}
             </button>
           </form>
         </div>
@@ -490,32 +874,34 @@ const SubmitComplaint = () => {
             </div>
 
             <h3 style={{ marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '1.1rem' }}>
-              <Brain size={18} color="var(--accent-cyan)" /> Live AI Assessment
+              <Brain size={18} color="var(--accent-cyan)" /> {t('aiAssessment.panelTitle')}
             </h3>
 
             {aiLoading ? (
               <div style={{ padding: '2rem 0', textAlign: 'center', color: 'var(--text-muted)' }}>
-                <p>Analyzing complaint text...</p>
+                <p>{language === 'ta' ? 'புகார் உரையை AI ஆய்வு செய்கிறது...' : 'Analyzing complaint text...'}</p>
               </div>
             ) : aiPreview ? (
               <div>
                 <div className="detail-meta-item">
-                  <div className="detail-meta-label">Calculated Priority</div>
+                  <div className="detail-meta-label">{t('aiAssessment.calculatedPriority')}</div>
                   <div className="detail-meta-val" style={{ marginTop: '0.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <span className={getPriorityBadgeClass(aiPreview.priority)}>{aiPreview.priority}</span>
+                    <span className={getPriorityBadgeClass(aiPreview.priority)}>
+                      {t(`priorities.${aiPreview.priority}`, aiPreview.priority)}
+                    </span>
                     {(aiPreview.isFoodSafetyOverride || (category === 'Canteen Dish Issue' && (issueType === 'FOREIGN_OBJECT' || issueType === 'HYGIENE'))) && (
                       <span style={{ fontSize: '0.7rem', padding: '0.15rem 0.45rem', background: 'rgba(239, 68, 68, 0.2)', color: '#f87171', border: '1px solid rgba(239, 68, 68, 0.4)', borderRadius: '4px', fontWeight: 700 }}>
-                        🛡️ Food Safety Priority Override
+                        🛡️ {language === 'ta' ? 'உணவு பாதுகாப்பு அவசர முன்னுரிமை' : 'Food Safety Priority Override'}
                       </span>
                     )}
                   </div>
                 </div>
 
                 <div className="detail-meta-item">
-                  <div className="detail-meta-label">Urgency Score</div>
+                  <div className="detail-meta-label">{t('aiAssessment.urgencyScore')}</div>
                   <div className="detail-meta-val" style={{ marginTop: '0.5rem' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
-                      <span>Severity weight:</span>
+                      <span>{t('aiAssessment.severityWeight')}:</span>
                       <span>{(aiPreview.score * 100).toFixed(0)}%</span>
                     </div>
                     <div style={{ width: '100%', height: '8px', background: 'rgba(255,255,255,0.06)', borderRadius: '4px', overflow: 'hidden' }}>
@@ -532,21 +918,23 @@ const SubmitComplaint = () => {
                 </div>
 
                 <div className="detail-meta-item">
-                  <div className="detail-meta-label">Sentiment Polarized</div>
+                  <div className="detail-meta-label">{t('aiAssessment.sentiment')}</div>
                   <div className="detail-meta-val" style={{ marginTop: '0.25rem' }}>
                     <span className={getSentimentBadgeClass(aiPreview.sentiment)}>{aiPreview.sentiment}</span>
                   </div>
                 </div>
 
                 <div className="detail-meta-item">
-                  <div className="detail-meta-label">Automatic Department Routing</div>
+                  <div className="detail-meta-label">{t('aiAssessment.assignedDepartment')}</div>
                   <div className="detail-meta-val" style={{ color: 'var(--accent-cyan)', fontSize: '0.95rem', marginTop: '0.15rem' }}>
                     {getTargetDepartment(category)}
                   </div>
                 </div>
 
                 <div className="detail-meta-item" style={{ borderStyle: 'dashed' }}>
-                  <div className="detail-meta-label">AI Logic Explanation</div>
+                  <div className="detail-meta-label">
+                    {language === 'ta' ? 'AI பகுப்பாய்வு விளக்கம்' : 'AI Logic Explanation'}
+                  </div>
                   <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.25rem', lineHeight: '1.4' }}>
                     {aiPreview.reason}
                   </p>
@@ -555,14 +943,16 @@ const SubmitComplaint = () => {
             ) : (
               <div className="empty-state" style={{ padding: '2rem 1rem' }}>
                 <Brain size={36} style={{ opacity: 0.15, marginBottom: '0.5rem' }} />
-                <p style={{ fontSize: '0.85rem' }}>Type details in description and click outside to see live AI priority scoring & department routing.</p>
+                <p style={{ fontSize: '0.85rem' }}>
+                  {language === 'ta' 
+                    ? 'புகாரின் தலைப்பில் பேசவும் அல்லது தட்டச்சு செய்யவும். AI தானாகவே பிரிவு, விரிவான விளக்கம் மற்றும் முன்னுரிமையை பகுப்பாய்வு செய்யும்.'
+                    : 'Speak or type in Complaint Title to see automatic Category, Description, and live AI priority assessment.'}
+                </p>
               </div>
             )}
           </div>
         </div>
       </div>
-
-      {/* Certificate Lightbox Modal - removed (OD feature deleted) */}
     </div>
   );
 };

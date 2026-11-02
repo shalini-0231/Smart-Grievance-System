@@ -31,7 +31,9 @@ for _item in KEYWORD_SEVERITY:
 # Food-Safety groups:
 # 1. Serious Food Safety Incidents: life-safety hazards, contamination, poisoning -> auto-escalates to CRITICAL
 SERIOUS_FOOD_SAFETY_KEYWORDS: set = {
-    'cockroach', 'foreign object', 'poison', 'food poisoning'
+    'cockroach', 'foreign object', 'poison', 'poisoning', 'poisoned', 'poisonous',
+    'food poisoning', 'water poisoning', 'toxic', 'toxicity', 'contamination', 'contaminated',
+    'விஷம்', 'நஞ்சு'
 }
 
 # 2. Food Hygiene Issues: sanitation, stale/spoiled food -> escalated to HIGH
@@ -179,6 +181,19 @@ def analyze_complaint(text: str,
                 }
             exact_tokens.add(token)
 
+    # ── Critical Safety Root Keyword Guard ────────────────────────────────────
+    # Ensure all forms of poison (poison, poisoning, poisoned, poisonous), toxic, and contamination are recognized
+    critical_matches = re.findall(r'\b(poison\w*|toxic\w*|contaminat\w*|விஷம்|நஞ்சு)\b', clean_text)
+    for cw in critical_matches:
+        if cw not in matched and not any(cw in k for k in matched):
+            matched[cw] = {
+                'original':   cw,
+                'weight':     40,
+                'category':   'Canteen Dish Issue',
+                'department': 'Canteen & Hospitality',
+                'match_type': 'critical_safety_stem',
+            }
+
     # ── Step 3: Weighted sum ──────────────────────────────────────────────────
     total_score: int = sum(m['weight'] for m in matched.values())
 
@@ -198,7 +213,11 @@ def analyze_complaint(text: str,
     dominant_department: str = dominant['department']  if dominant else None
 
     # ── Step 4: Food Safety vs Ordinary Food Quality distinction ──────────────
-    has_serious_kw = any(m['original'] in SERIOUS_FOOD_SAFETY_KEYWORDS for m in matched.values())
+    has_serious_kw = any(
+        m['original'] in SERIOUS_FOOD_SAFETY_KEYWORDS or 
+        any(k in m['original'].lower() for k in ['poison', 'toxic', 'contaminat', 'cockroach', 'foreign object', 'விஷம்', 'நஞ்சு'])
+        for m in matched.values()
+    ) or bool(critical_matches)
     is_serious_food_incident = has_serious_kw or (issue_type == 'FOREIGN_OBJECT')
 
     has_high_hygiene_kw = any(m['original'] in HIGH_FOOD_HYGIENE_KEYWORDS for m in matched.values())

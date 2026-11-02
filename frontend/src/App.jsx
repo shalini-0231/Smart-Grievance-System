@@ -2,6 +2,7 @@ import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ToastProvider } from './context/ToastContext';
+import { LanguageProvider } from './context/LanguageContext';
 import Navbar from './components/Navbar';
 import GlobalFloatingChatbot from './components/GlobalFloatingChatbot';
 import LandingPage from './pages/LandingPage';
@@ -12,6 +13,9 @@ import SubmitComplaint from './pages/SubmitComplaint';
 import MyComplaints from './pages/MyComplaints';
 import AdminDashboard from './pages/AdminDashboard';
 import AdminAnalytics from './pages/AdminAnalytics';
+import AdminReports from './pages/AdminReports';
+import AdminOfficers from './pages/AdminOfficers';
+import AdminUsers from './pages/AdminUsers';
 import ComplaintDetails from './pages/ComplaintDetails';
 
 // Protected Route Wrapper Component
@@ -40,6 +44,7 @@ const ProtectedRoute = ({ children, allowedRoles }) => {
 
 function App() {
   return (
+    <LanguageProvider>
     <AuthProvider>
       <ToastProvider>
         <Router>
@@ -84,7 +89,7 @@ function App() {
                 path="/admin/dashboard" 
                 element={
                   <ProtectedRoute allowedRoles={['admin']}>
-                    <AdminDashboard />
+                    <AdminDashboard defaultTab="overview" />
                   </ProtectedRoute>
                 } 
               />
@@ -92,7 +97,23 @@ function App() {
                 path="/admin/complaints" 
                 element={
                   <ProtectedRoute allowedRoles={['admin']}>
-                    <AdminDashboard />
+                    <AdminDashboard defaultTab="grievances" />
+                  </ProtectedRoute>
+                } 
+              />
+              <Route 
+                path="/admin/officers" 
+                element={
+                  <ProtectedRoute allowedRoles={['admin']}>
+                    <AdminOfficers />
+                  </ProtectedRoute>
+                } 
+              />
+              <Route 
+                path="/admin/sla" 
+                element={
+                  <ProtectedRoute allowedRoles={['admin']}>
+                    <AdminDashboard defaultTab="sla" />
                   </ProtectedRoute>
                 } 
               />
@@ -101,6 +122,30 @@ function App() {
                 element={
                   <ProtectedRoute allowedRoles={['admin']}>
                     <AdminAnalytics />
+                  </ProtectedRoute>
+                } 
+              />
+              <Route 
+                path="/admin/users" 
+                element={
+                  <ProtectedRoute allowedRoles={['admin']}>
+                    <AdminUsers />
+                  </ProtectedRoute>
+                } 
+              />
+              <Route 
+                path="/admin/reports" 
+                element={
+                  <ProtectedRoute allowedRoles={['admin']}>
+                    <AdminReports />
+                  </ProtectedRoute>
+                } 
+              />
+              <Route 
+                path="/admin/alerts" 
+                element={
+                  <ProtectedRoute allowedRoles={['admin']}>
+                    <AdminDashboard defaultTab="notifications" />
                   </ProtectedRoute>
                 } 
               />
@@ -124,6 +169,7 @@ function App() {
       </Router>
     </ToastProvider>
     </AuthProvider>
+    </LanguageProvider>
   );
 }
 

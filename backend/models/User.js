@@ -19,12 +19,24 @@ const UserSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['student', 'admin'],
+    enum: ['student', 'officer', 'admin'],
     default: 'student'
   },
   department: {
     type: String,
-    default: null // Relevant for admins assigned to specific departments
+    default: null
+  },
+  rollNumber: {
+    type: String,
+    default: ''
+  },
+  phone: {
+    type: String,
+    default: ''
+  },
+  isActive: {
+    type: Boolean,
+    default: true
   },
   createdAt: {
     type: Date,

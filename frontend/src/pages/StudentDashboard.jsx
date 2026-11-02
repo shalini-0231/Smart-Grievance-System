@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
-import { ClipboardList, PlusCircle, CheckCircle2, AlertTriangle, Clock, Eye, ShieldAlert, ShieldCheck } from 'lucide-react';
+import { useLanguage } from '../context/LanguageContext';
+import { ClipboardList, PlusCircle, CheckCircle2, AlertTriangle, Clock, Eye, ShieldAlert } from 'lucide-react';
 
 const StudentDashboard = () => {
   const [stats, setStats] = useState({ total: 0, pending: 0, resolved: 0, critical: 0 });
@@ -9,6 +10,7 @@ const StudentDashboard = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   
+  const { language, t } = useLanguage();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -20,7 +22,7 @@ const StudentDashboard = () => {
         const complaintsData = await api.getComplaints();
         setComplaints(complaintsData);
       } catch (err) {
-        setError('Failed to fetch dashboard data. Please try again.');
+        setError(language === 'ta' ? 'தரவுகளைப் பெறுவதில் பிழை ஏற்பட்டது. மீண்டும் முயற்சிக்கவும்.' : 'Failed to fetch dashboard data. Please try again.');
         console.error(err);
       } finally {
         setLoading(false);
@@ -28,10 +30,10 @@ const StudentDashboard = () => {
     };
 
     fetchData();
-  }, []);
+  }, [language]);
 
   const formatDate = (dateString) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
+    return new Date(dateString).toLocaleDateString(language === 'ta' ? 'ta-IN' : 'en-US', {
       year: 'numeric',
       month: 'short',
       day: 'numeric'
@@ -43,7 +45,6 @@ const StudentDashboard = () => {
   };
 
   const getStatusBadgeClass = (status) => {
-    // Replace spaces with underscores for styling names
     const formatted = status.toLowerCase().replace(' ', '_');
     return `badge badge-status-${formatted}`;
   };
@@ -51,7 +52,7 @@ const StudentDashboard = () => {
   if (loading) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '50vh' }}>
-        <h3>Loading Student Dashboard...</h3>
+        <h3>{t('loading')}</h3>
       </div>
     );
   }
@@ -60,11 +61,13 @@ const StudentDashboard = () => {
     <div>
       <div className="dashboard-header">
         <div>
-          <h2>Student Dashboard</h2>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Welcome to the SCGRS Portal. Monitor your grievances and submit new claims.</p>
+          <h2>{t('nav.dashboard')}</h2>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+            {t('dashboard.studentPortal')}
+          </p>
         </div>
         <button className="btn btn-blue" onClick={() => navigate('/student/submit')}>
-          <PlusCircle size={18} /> Submit Complaint
+          <PlusCircle size={18} /> {t('dashboard.fileNewComplaint')}
         </button>
       </div>
 
@@ -82,7 +85,7 @@ const StudentDashboard = () => {
             <ClipboardList size={22} />
           </div>
           <div className="metric-info">
-            <h4>Total Filed</h4>
+            <h4>{t('dashboard.totalGrievances')}</h4>
             <div className="metric-value">{stats.total}</div>
           </div>
         </div>
@@ -92,7 +95,7 @@ const StudentDashboard = () => {
             <Clock size={22} />
           </div>
           <div className="metric-info">
-            <h4>Pending Action</h4>
+            <h4>{t('dashboard.pending')}</h4>
             <div className="metric-value">{stats.pending}</div>
           </div>
         </div>
@@ -102,7 +105,7 @@ const StudentDashboard = () => {
             <CheckCircle2 size={22} />
           </div>
           <div className="metric-info">
-            <h4>Resolved Cases</h4>
+            <h4>{t('dashboard.resolved')}</h4>
             <div className="metric-value">{stats.resolved}</div>
           </div>
         </div>
@@ -112,7 +115,7 @@ const StudentDashboard = () => {
             <ShieldAlert size={22} />
           </div>
           <div className="metric-info">
-            <h4>Active Critical</h4>
+            <h4>{t('dashboard.criticalHigh')}</h4>
             <div className="metric-value">{stats.critical}</div>
           </div>
         </div>
@@ -120,18 +123,18 @@ const StudentDashboard = () => {
 
       {/* Table Section */}
       <div className="glass-card">
-        <h3 style={{ marginBottom: '1.25rem' }}>My Grievance Submissions</h3>
+        <h3 style={{ marginBottom: '1.25rem' }}>{t('dashboard.recentGrievances')}</h3>
         
         {complaints.length === 0 ? (
           <div className="empty-state">
             <ClipboardList className="empty-state-icon" size={48} />
-            <p>You have not submitted any complaints yet.</p>
+            <p>{t('dashboard.noGrievancesYet')}</p>
             <button 
               className="btn btn-outline" 
               onClick={() => navigate('/student/submit')}
               style={{ marginTop: '1rem' }}
             >
-              File Your First Complaint
+              {t('dashboard.fileNewComplaint')}
             </button>
           </div>
         ) : (
@@ -139,14 +142,13 @@ const StudentDashboard = () => {
             <table className="custom-table">
               <thead>
                 <tr>
-                  <th>Token ID</th>
-                  <th>Title</th>
-                  <th>Category</th>
-                  <th>Priority</th>
-                  <th>Assigned Department</th>
-                  <th>Status</th>
-                  <th>Submitted Date</th>
-                  <th>Actions</th>
+                  <th>{t('dashboard.ticketId')}</th>
+                  <th>{t('dashboard.title')}</th>
+                  <th>{t('category')}</th>
+                  <th>{t('priority')}</th>
+                  <th>{t('status')}</th>
+                  <th>{t('date')}</th>
+                  <th>{t('actions')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -157,17 +159,22 @@ const StudentDashboard = () => {
                     </td>
                     <td style={{ fontWeight: 500 }}>
                       <div>{c.title}</div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginTop: '0.2rem', flexWrap: 'wrap' }}>
-                        {c.anonymous && <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>(Anonymous)</span>}
-                      </div>
+                      {c.anonymous && (
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          ({language === 'ta' ? 'அநாமதேயம்' : 'Anonymous'})
+                        </span>
+                      )}
                     </td>
-                    <td>{c.category}</td>
+                    <td>{t(`categories.${c.category}`, c.category)}</td>
                     <td>
-                      <span className={getPriorityBadgeClass(c.priority)}>{c.priority}</span>
+                      <span className={getPriorityBadgeClass(c.priority)}>
+                        {t(`priorities.${c.priority}`, c.priority)}
+                      </span>
                     </td>
-                    <td>{c.department}</td>
                     <td>
-                      <span className={getStatusBadgeClass(c.status)}>{c.status}</span>
+                      <span className={getStatusBadgeClass(c.status)}>
+                        {t(`statuses.${c.status}`, c.status)}
+                      </span>
                     </td>
                     <td>{formatDate(c.createdAt)}</td>
                     <td>
@@ -177,7 +184,7 @@ const StudentDashboard = () => {
                           onClick={() => navigate(`/complaints/${c._id}`)}
                           style={{ padding: '0.35rem 0.65rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
                         >
-                          <Eye size={14} /> View
+                          <Eye size={14} /> {t('view')}
                         </button>
                       </div>
                     </td>

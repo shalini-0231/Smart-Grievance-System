@@ -2,7 +2,8 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
 from priority_engine import analyze_complaint
-from question_engine import get_guided_question, detect_category_from_text
+from question_engine import get_guided_question, detect_category_from_text, expand_complaint_description
+from speech_normalizer import normalize_campus_speech
 from campus_knowledge import query_campus_ai
 from ml_classifier import classify_complaint_ml
 from semantic_similarity import match_duplicates_semantic, compute_semantic_similarity
@@ -48,6 +49,64 @@ def ml_classify():
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route('/api/ai/voice-process', methods=['POST'])
+def voice_process():
+    """
+    Voice-Based Complaint Entry Processor:
+    1. Analyzes recognized speech to identify the most suitable Category.
+    2. Automatically generates an expanded, professional Detailed Description.
+    3. Runs AI priority and sentiment assessment.
+    """
+    try:
+        data = request.get_json() or {}
+        raw_text = (data.get('text') or '').strip()
+        speech_text = normalize_campus_speech(raw_text)
+        lang = data.get('lang', 'en-IN')
+        
+        if not speech_text:
+            return jsonify({
+                "title": "",
+                "category": "Other",
+                "description": "",
+                "confidence": 0
+            })
+
+        # Step 1: Detect category using ML classification for English, or keyword detector for Tamil
+        is_tamil = any(0x0B80 <= ord(c) <= 0x0BFF for c in speech_text)
+        category = "Other"
+        ml_res = {}
+        
+        if is_tamil:
+            category = detect_category_from_text(speech_text)
+        else:
+            ml_res = classify_complaint_ml(speech_text)
+            if ml_res and ml_res.get('top_features') and ml_res.get('predicted_category') != 'Other':
+                category = ml_res.get('predicted_category')
+            else:
+                category = detect_category_from_text(speech_text)
+
+        # Step 2: Automatically generate clear, expanded description preserving original meaning
+        expanded_desc = expand_complaint_description(speech_text, category)
+
+        # Step 3: Run existing AI priority analysis
+        analysis = analyze_complaint(expanded_desc or speech_text)
+
+        return jsonify({
+            "title": speech_text,
+            "category": category,
+            "description": expanded_desc,
+            "confidence": ml_res.get('confidence', 0.8),
+            "priority": analysis.get('priority', 'MEDIUM'),
+            "assignedDepartment": analysis.get('assignedDepartment')
+        })
+    except Exception as e:
+        return jsonify({
+            "title": speech_text if 'speech_text' in locals() else "",
+            "category": "Other",
+            "description": speech_text if 'speech_text' in locals() else "",
+            "error": str(e)
+        }), 500
 
 @app.route('/api/ai/next-question', methods=['POST'])
 def next_question():

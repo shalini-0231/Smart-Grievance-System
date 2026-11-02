@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
+import { useLanguage } from '../context/LanguageContext';
 import { api } from '../services/api';
 import { 
   ArrowLeft, AlertTriangle, ShieldCheck, User, Calendar, Tag, Building2, 
@@ -170,6 +171,7 @@ const ComplaintDetails = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
   const { addToast } = useToast();
+  const { t } = useLanguage();
 
   const [complaint, setComplaint] = useState(null);
   const [feedback, setFeedback] = useState(null);
@@ -457,8 +459,8 @@ const ComplaintDetails = () => {
             <span style={{ fontFamily: 'monospace', fontSize: '1.1rem', fontWeight: 700, color: 'var(--accent-cyan)' }}>
               {complaint.complaintId}
             </span>
-            <span className={getPriorityBadgeClass(complaint.priority)}>{complaint.priority}</span>
-            <span className={getStatusBadgeClass(complaint.status)}>{complaint.status}</span>
+            <span className={getPriorityBadgeClass(complaint.priority)}>{t(`priorities.${complaint.priority}`, complaint.priority)}</span>
+            <span className={getStatusBadgeClass(complaint.status)}>{t(`statuses.${complaint.status}`, complaint.status)}</span>
             {complaint.confidencePercent > 0 && (
               <span className="badge" style={{ background: 'rgba(6,182,212,0.15)', color: 'var(--accent-cyan)', border: '1px solid rgba(6,182,212,0.3)', fontSize: '0.75rem' }}>
                 🎯 {complaint.confidencePercent}% Confidence
@@ -483,6 +485,76 @@ const ComplaintDetails = () => {
           <h2>{complaint.title}</h2>
         </div>
       </div>
+
+      {/* Admin Quick Action Banner for Duplicate Grievance */}
+      {(complaint.isDuplicate || complaint.affectedStudentCount > 1) && (
+        <div style={{
+          background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.16) 0%, rgba(239, 68, 68, 0.12) 100%)',
+          border: '1px solid rgba(245, 158, 11, 0.5)',
+          borderRadius: '10px',
+          padding: '1rem 1.25rem',
+          marginBottom: '1.25rem',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: '1rem'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+            <div style={{
+              width: '40px',
+              height: '40px',
+              borderRadius: '8px',
+              background: 'rgba(245, 158, 11, 0.25)',
+              color: '#f59e0b',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '1.2rem',
+              flexShrink: 0
+            }}>
+              ⚡
+            </div>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: '0.98rem', color: '#fbbf24', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span>TAKE QUICK ACTION: Recurring Duplicate Cluster</span>
+                <span style={{ fontSize: '0.72rem', padding: '2px 8px', borderRadius: '10px', background: '#f59e0b', color: '#000', fontWeight: 800 }}>
+                  👥 {complaint.affectedStudentCount || 2} Students Affected
+                </span>
+              </div>
+              <div style={{ fontSize: '0.84rem', color: 'var(--text-secondary)', marginTop: '3px' }}>
+                {complaint.isDuplicate
+                  ? `This ticket is linked as a duplicate to Parent Ticket ${complaint.parentComplaintId?.complaintId || complaint.parentComplaintId || ''}. Take immediate action on the primary ticket to resolve for all affected students.`
+                  : `Multiple students have reported this identical issue. Fast-track officer assignment and update resolution remarks.`}
+              </div>
+            </div>
+          </div>
+          {user?.role === 'admin' && (
+            <button
+              className="btn"
+              onClick={() => {
+                const el = document.getElementById('admin-actions-card');
+                if (el) el.scrollIntoView({ behavior: 'smooth' });
+              }}
+              style={{
+                background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+                color: '#000',
+                fontWeight: 700,
+                fontSize: '0.85rem',
+                padding: '0.5rem 1rem',
+                border: 'none',
+                borderRadius: '8px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                cursor: 'pointer'
+              }}
+            >
+              ⚡ Fast-Track Resolution
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Duplicate Cluster Notice */}
       {complaint.isDuplicate && (
@@ -601,7 +673,7 @@ const ComplaintDetails = () => {
                   <Tag size={14} />
                   <span>CATEGORY</span>
                 </div>
-                <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{complaint.category}</div>
+                <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{t(`categories.${complaint.category}`, complaint.category)}</div>
               </div>
 
               <div>
@@ -998,7 +1070,7 @@ const ComplaintDetails = () => {
 
           {/* Assign Responsible Officer (Admin Panel) */}
           {user.role === 'admin' && (
-            <div className="glass-card" style={{ border: '1px solid rgba(59, 130, 246, 0.3)' }}>
+            <div id="admin-actions-card" className="glass-card" style={{ border: '1px solid rgba(59, 130, 246, 0.3)' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
                 <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '1.05rem' }}>
                   <UserCheck size={18} color="var(--accent-cyan)" /> Assign Responsible Officer

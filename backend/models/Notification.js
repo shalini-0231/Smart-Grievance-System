@@ -26,6 +26,7 @@ const NotificationSchema = new mongoose.Schema({
       'OFFICER_ASSIGNED',
       'SLA_BREACH',
       'SLA_WARNING',
+      'DUPLICATE_ALERT',
       'DUPLICATE_UPVOTE',
       'FEEDBACK_RECEIVED',
       'REOPENED',

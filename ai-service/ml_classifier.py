@@ -7,6 +7,7 @@ with a pure-Python resilient fallback and Safety Hybrid Fusion.
 import math
 import re
 from collections import defaultdict
+from speech_normalizer import normalize_campus_speech
 
 # ── 1. Comprehensive Campus Grievance Training Corpus ───────────────────────
 TRAINING_DATA = [
@@ -201,7 +202,16 @@ def classify_complaint_ml(text: str) -> dict:
     Classifies grievance text using either Scikit-Learn or Built-in TF-IDF classifier.
     Returns predicted category, confidence, and probability distribution.
     """
-    if not text or len(text.strip()) < 4:
+    if not text:
+        return {
+            "predicted_category": "Other",
+            "confidence": 0.0,
+            "distribution": {},
+            "top_features": [],
+            "model_engine": "Rule Fallback"
+        }
+    text = normalize_campus_speech(text)
+    if len(text.strip()) < 4:
         return {
             "predicted_category": "Other",
             "confidence": 0.0,
